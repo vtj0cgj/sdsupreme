@@ -1,14 +1,21 @@
 use std::env;
 use std::fs;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 use rodio::{Decoder, OutputStream, Sink};
-use std::thread;
-use std::time::Duration;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crossterm::{
+    event::{self, KeyCode},
+    execute,
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    cursor,
+};
 use ctrlc;
+use rodio::Source;
 
 fn list_music_files(path: &Path) -> Vec<String> {
     let mut music_files = Vec::new();
@@ -23,22 +30,52 @@ fn list_music_files(path: &Path) -> Vec<String> {
 }
 
 fn play_music(file_path: String, is_paused: Arc<AtomicBool>, sink: Arc<Mutex<Sink>>) -> Result<(), Box<dyn std::error::Error>> {
-    let (_stream, stream_handle) = OutputStream::try_default()?;
-    let sink_clone = Arc::clone(&sink);
-
     let file = fs::File::open(file_path)?;
     let source = Decoder::new(BufReader::new(file))?;
-    sink_clone.lock().unwrap().append(source);
+    let duration = source.total_duration().unwrap_or(Duration::new(0, 0));
+    let start_time = Instant::now();
+    sink.lock().unwrap().append(source);
 
-    // Handle pausing and resuming
+    // Handle pausing, resuming and progress bar
     loop {
         if is_paused.load(Ordering::SeqCst) {
-            sink_clone.lock().unwrap().pause();
+            sink.lock().unwrap().pause();
         } else {
-            sink_clone.lock().unwrap().play();
+            sink.lock().unwrap().play();
         }
+
+        // Display progress bar
+        let elapsed = start_time.elapsed().as_secs();
+        let total = duration.as_secs();
+        if total > 0 {
+            let progress = elapsed as f64 / total as f64;
+            print_progress_bar(progress, elapsed, total);
+        }
+
         thread::sleep(Duration::from_millis(100));
+
+        if elapsed >= total {
+            break;
+        }
     }
+
+    Ok(())
+}
+
+fn print_progress_bar(progress: f64, elapsed: u64, total: u64) {
+    let bar_length = 50;
+    let filled_length = (bar_length as f64 * progress) as usize;
+    let bar: String = "=".repeat(filled_length) + &"-".repeat(bar_length - filled_length);
+
+    print!(
+        "\r[{}] {:02}:{:02}/{:02}:{:02}",
+        bar,
+        elapsed / 60,
+        elapsed % 60,
+        total / 60,
+        total % 60
+    );
+    io::stdout().flush().unwrap();
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,12 +129,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let sink_clone = Arc::clone(&sink);
+    let is_paused_clone = Arc::clone(&is_paused);
+
     thread::spawn(move || {
-        play_music(selected_file, Arc::clone(&is_paused), sink_clone).expect("Error playing music");
+        play_music(selected_file, is_paused_clone, sink_clone).expect("Error playing music");
     });
 
-    // Keep the main thread alive while the music plays
+    // Terminal setup for UI
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    terminal::enable_raw_mode()?;
+    execute!(io::stdout(), cursor::Hide)?;
+
+    // Handle key events for pausing, resuming, and exiting
     loop {
-        thread::sleep(Duration::from_secs(1));
+        if event::poll(Duration::from_millis(100))? {
+            if let event::Event::Key(key_event) = event::read()? {
+                match key_event.code {
+                    KeyCode::Char('p') => {
+                        let paused = is_paused.load(Ordering::SeqCst);
+                        is_paused.store(!paused, Ordering::SeqCst);
+                    }
+                    KeyCode::Esc => break,
+                    _ => {}
+                }
+            }
+        }
     }
+
+    // Cleanup
+    terminal::disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+    execute!(io::stdout(), cursor::Show)?;
+    println!("\nExiting...");
+    Ok(())
 }

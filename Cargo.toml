@@ -8,6 +8,6 @@ edition = "2021"
 [dependencies]
 rodio = "0.14.0"
 walkdir = "2.3.2"
-ctrlc = "3.2.2"
 crossterm = "0.25.0"
 indicatif = "0.17.3"
+ctrlc = "3.4.4"
