@@ -15,14 +15,14 @@ fn list_music_files(path: &Path) -> Vec<String> {
     for entry in WalkDir::new(path) {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mp3") {
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("flac") {
             music_files.push(path.to_string_lossy().into_owned());
         }
     }
     music_files
 }
 
-fn play_music(file_path: &str, is_paused: Arc<AtomicBool>, sink: Arc<Mutex<Sink>>) -> Result<(), Box<dyn std::error::Error>> {
+fn play_music(file_path: String, is_paused: Arc<AtomicBool>, sink: Arc<Mutex<Sink>>) -> Result<(), Box<dyn std::error::Error>> {
     let (_stream, stream_handle) = OutputStream::try_default()?;
     let sink_clone = Arc::clone(&sink);
 
@@ -41,7 +41,7 @@ fn play_music(file_path: &str, is_paused: Arc<AtomicBool>, sink: Arc<Mutex<Sink>
     }
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <SD card path>", args[0]);
@@ -75,12 +75,12 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let selected_file = &music_files[selection];
+    let selected_file = music_files[selection].clone();
     println!("Playing {}", selected_file);
 
     let is_paused = Arc::new(AtomicBool::new(false));
-    let (_stream, stream_handle) = OutputStream::try_default()?;
-    let sink = Arc::new(Mutex::new(Sink::try_new(&stream_handle)?));
+    let (_stream, stream_handle) = OutputStream::try_default().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let sink = Arc::new(Mutex::new(Sink::try_new(&stream_handle).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?));
 
     // Set up Ctrl+C handler
     {
